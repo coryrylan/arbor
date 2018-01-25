@@ -8,7 +8,7 @@
 
   <div *ngIf="combinedTasks | async; let tasks" class="build-progress">
     <div *ngFor="let task of tasks" class="build-progress__task">
-      <span class="build-progress__task-name">Task: {{ task.taskName }}</span>
+      <span class="build-progress__task-name">Task: {{ task.taskFlag }}</span>
       <div *ngFor="let projectTask of task.projects" class="build-progress__task-projects">
         <span class="build-progress__project-name">{{ projectTask.projectName }}:</span>
         <span class="build-progress__project-status" [style.color]="statusColor(projectTask.status)">{{ projectTask.statusText }}</span>
