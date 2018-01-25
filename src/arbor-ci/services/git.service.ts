@@ -1,12 +1,11 @@
 import { Injectable } from '@angular/core';
 import * as path from 'path';
 import { Observable } from 'rxjs/Observable';
-import { Subscription } from 'rxjs/Subscription';
 
 import { computeUpdatedBuildTaskProgress } from '../../common/helpers/progress.helpers';
 import { deleteFolder } from './../../common/helpers/fs.helpers';
 import { TaskProgress } from './../../common/interfaces/build';
-import { BuildConfiguration, Repo } from './../../common/interfaces/build-configuration';
+import { BuildConfiguration } from './../../common/interfaces/build-configuration';
 import { Project } from './../../common/interfaces/project';
 import { RunningTask } from './../../common/interfaces/running-task';
 import { TaskStatus } from './../../common/interfaces/running-task';
@@ -15,10 +14,9 @@ import { AgentService } from './agent.service';
 import { GitHubAppService } from './github-app.service';
 
 const checkoutPath = './checkout/';
-const maxParallelOperations = 3;
 
 interface CloneProject extends Project {
-  repo: Repo;
+  repo: string;
 }
 
 interface CloneTask extends RunningTask {
@@ -32,11 +30,11 @@ export class GitService {
   cloneRepos(buildId: number, branch: string, configuration: BuildConfiguration) {
     let checkoutProgress: TaskProgress[] = [];
 
-    const updateTaskStatus = (task: RunningTask, status: TaskStatus, runningTasks: RunningTask[]) => {
+    const updateTaskStatus = (task: RunningTask, status: TaskStatus) => {
       return Observable.of(undefined)
         .switchMap(() => {
           task.status = status;
-          checkoutProgress = computeUpdatedBuildTaskProgress(checkoutProgress, runningTasks);
+          checkoutProgress = computeUpdatedBuildTaskProgress(checkoutProgress, [task]);
           return this.agentService.updateBuildProgress(buildId, checkoutProgress, 'checkout');
         });
     };
@@ -49,20 +47,23 @@ export class GitService {
           project: { name: 'all', projectPath: path.resolve(checkoutPath) }
         };
 
-        return this.clean(cleanTask, (status: TaskStatus) => updateTaskStatus(cleanTask, status, [cleanTask]));
+        return this.clean(cleanTask, (status: TaskStatus) => updateTaskStatus(cleanTask, status));
       })
       .switchMap(() => this.githubApp.getAccessToken())
       .switchMap(accessToken => {
-        const cloneProjects = configuration.repos
-          .map<CloneProject>(repo => ({ repo, name: repo.name, projectPath: path.resolve(path.join(checkoutPath, repo.name)) }));
+        const cloneProject: CloneProject = {
+          repo: configuration.repo,
+          name: configuration.repo,
+          projectPath: path.resolve(path.join(checkoutPath, configuration.repo))
+        };
 
-        const cloneTasks: CloneTask[] = cloneProjects
-          .map(project => ({ project, taskFlag: 'clone', status: TaskStatus.Waiting }));
+        const cloneTask: CloneTask = {
+          project: cloneProject,
+          taskFlag: 'clone',
+          status: TaskStatus.Waiting
+        };
 
-        const cloneSources = cloneTasks
-          .map(task => this.clone(task, branch, accessToken, (status: TaskStatus) => updateTaskStatus(task, status, cloneTasks)));
-
-        return this.forkJoinWithLimit(cloneSources, maxParallelOperations);
+        return this.clone(cloneTask, branch, accessToken, (status: TaskStatus) => updateTaskStatus(cloneTask, status));
       });
   }
 
@@ -78,57 +79,11 @@ export class GitService {
     const clonePath = task.project.projectPath;
     const url = `https://x-access-token:${accessToken}@github.com/${repo}.git`;
 
-    const cloneCommand = task.project.repo.defaultBranchOnly ?
-      `git clone --single-branch --depth 1 ${url} ${clonePath}` :
-      `git clone --branch ${branch} --single-branch --depth 1 ${url} ${clonePath}`;
+    const cloneCommand = `git clone --branch ${branch} --single-branch --depth 1 ${url} ${clonePath}`;
 
     return updateThisTaskStatus(TaskStatus.InProgress)
       .switchMap(() => this.shell.execute(cloneCommand))
       .switchMap(() => updateThisTaskStatus(TaskStatus.Success))
       .catch(error => updateThisTaskStatus(TaskStatus.Failed).switchMapTo(Observable.throw(error)));
-  }
-
-  private forkJoinWithLimit(sources: Observable<void>[], limit: number) {
-    return new Observable<void>(observer => {
-      if (sources.length === 0) {
-        observer.next(void 0);
-        observer.complete();
-      }
-
-      const subscriptions: Subscription[] = [];
-
-      let completed = 0;
-      const queue = [ ...sources ];
-
-      const destroy = () => {
-        for (const subscription of subscriptions) {
-          if (subscription && subscription.closed === false) {
-            subscription.unsubscribe();
-          }
-        }
-      };
-
-      const handleCompletion = () => {
-        completed++;
-
-        if (completed === sources.length) {
-          observer.next(void 0);
-          observer.complete();
-        }
-      };
-
-      const next = () => {
-        if (queue.length) {
-          subscriptions.push(queue.shift()
-            .subscribe(() => { handleCompletion(); next(); }, error => { observer.error(error); destroy(); }));
-        }
-      };
-
-      for (let i = 0; i < limit; i++) {
-        next();
-      }
-
-      return destroy;
-    });
   }
 }

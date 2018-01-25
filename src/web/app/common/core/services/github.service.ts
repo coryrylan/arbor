@@ -15,30 +15,9 @@ export class GitHubService {
   }
 
   getBranches(buildConfiguration: BuildConfiguration) {
-    const repos = buildConfiguration.repos
-      .filter(repo => repo.defaultBranchOnly === false)
-      .map(repo => repo.name);
-
-    let getBranches: Observable<string[]>;
-
-    if (repos.length > 0) {
-      getBranches = this.accessToken
-        .first()
-        .switchMap(accessToken => Observable.combineLatest(repos.map(repo => this.github.get<GithubBranch[]>(`repos/${repo}/branches`, accessToken))))
-        .map(repoBranches => {
-          const distinct = repoBranches
-            .reduce((flat, current) => flat.concat(current), [])
-            .map(branch => branch.name)
-            .filter((branch, index, self) => self.indexOf(branch) === index);
-
-          return repoBranches
-            .map(branches => branches.map(branch => branch.name))
-            .reduce((intersection, branches) => intersection.filter(branch => branches.indexOf(branch) > -1), distinct);
-        });
-    } else {
-      getBranches = Observable.of(['master']);
-    }
-
-    return getBranches;
+    return this.accessToken
+      .first()
+      .switchMap(accessToken => this.github.get<GithubBranch[]>(`repos/${buildConfiguration.repo}/branches`, accessToken))
+      .map(branches => branches.map(branch => branch.name));
   }
 }
